@@ -3480,7 +3480,15 @@ public:
 		mTextureNames[bufIndex] = buffer;
 
 		sscanf_s(op1, "(%[^,]", format, 16);	// Match first xx of (xx,xx,xx,xx)
-		string form4 = string(format) + "4";	// Grim. Known to fail sometimes.
+		string form4;
+		if (string(format) == "unorm")
+		{
+			form4 = string(format) + " float4";	// Grim. Known to fail sometimes.
+		}
+		else
+		{
+			form4 = string(format) + "4";	// Grim. Known to fail sometimes.
+		}
 		mTextureType[bufIndex] = texType + "<" + form4 + ">";
 
 		sprintf(buffer, "%s t%d : register(t%d);\n\n", mTextureType[bufIndex].c_str(), bufIndex, bufIndex);
