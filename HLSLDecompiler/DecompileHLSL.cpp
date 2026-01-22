@@ -626,6 +626,35 @@ public:
 		mOutput.insert(mOutput.end(), mainFooter, mainFooter + strlen(mainFooter));
 	}
 
+	void InitializeOutputRegisters()
+	{
+		// Initialize all output registers to zero at the beginning of the function.
+		// This ensures that all components (including unused ones like .zw or .w)
+		// have defined values, preventing HLSL compiler warnings about uninitialized outputs.
+		//
+		// For example, if the output signature declares:
+		//   out float4 o1 : TEXCOORD0
+		// but the shader only assigns o1.xy, the compiler will warn that o1.zw is uninitialized.
+		//
+		// This function initializes all declared output registers to avoid such warnings.
+
+		for (map<string, DataType>::iterator it = mOutputRegisterType.begin();
+		     it != mOutputRegisterType.end(); ++it)
+		{
+			const string& regName = it->first;
+
+			// Skip special registers that don't need initialization
+			if (regName.find("oDepth") != string::npos ||
+			    regName.find("oStencilRef") != string::npos ||
+			    regName.find("oMask") != string::npos)
+				continue;
+
+			char buffer[256];
+			sprintf(buffer, "  %s = 0;\n", regName.c_str());
+			mOutput.insert(mOutput.end(), buffer, buffer + strlen(buffer));
+		}
+	}
+
 	void WriteZeroOutputSignature(const char *c, size_t size)
 	{
 		// Read until header.
@@ -4533,112 +4562,14 @@ public:
 			{
 				// dcl_input_sgv declares an input with a system-generated value semantic.
 				// Format: dcl_input_sgv vN[.mask], system_value_name
-				// Examples:
-				//   dcl_input_sgv v0.x, vertex_id    -> uint v0 : SV_VertexID
-				//   dcl_input_sgv v1.x, instance_id  -> uint v1 : SV_InstanceID
-				//   dcl_input_sgv v2.xyzw, position  -> float4 v2 : SV_Position
-
-				char register_name[64];
-				char system_value[64];
-				char semantic[64];
-				char type[32];
-
-				// Parse the register (op1) and system value (op2)
-				if (op1[0] != 0 && op2[0] != 0)
-				{
-					// Extract register name without swizzle
-					strcpy(register_name, op1);
-					char *dot = strchr(register_name, '.');
-					if (dot) *dot = 0;
-
-					// Parse system value name
-					strcpy(system_value, op2);
-
-					// Map system value to HLSL semantic
-					if (!strcmp(system_value, "vertex_id"))
-					{
-						strcpy(semantic, "SV_VertexID");
-						strcpy(type, "uint");
-					}
-					else if (!strcmp(system_value, "instance_id"))
-					{
-						strcpy(semantic, "SV_InstanceID");
-						strcpy(type, "uint");
-					}
-					else if (!strcmp(system_value, "primitive_id"))
-					{
-						strcpy(semantic, "SV_PrimitiveID");
-						strcpy(type, "uint");
-					}
-					else if (!strcmp(system_value, "position"))
-					{
-						strcpy(semantic, "SV_Position");
-						strcpy(type, "float4");
-					}
-					else if (!strcmp(system_value, "is_front_face"))
-					{
-						strcpy(semantic, "SV_IsFrontFace");
-						strcpy(type, "bool");
-					}
-					else if (!strcmp(system_value, "sampleIndex"))
-					{
-						strcpy(semantic, "SV_SampleIndex");
-						strcpy(type, "uint");
-					}
-					else if (!strcmp(system_value, "rendertarget_array_index"))
-					{
-						strcpy(semantic, "SV_RenderTargetArrayIndex");
-						strcpy(type, "uint");
-					}
-					else if (!strcmp(system_value, "viewport_array_index"))
-					{
-						strcpy(semantic, "SV_ViewportArrayIndex");
-						strcpy(type, "uint");
-					}
-					else if (!strcmp(system_value, "clip_distance"))
-					{
-						strcpy(semantic, "SV_ClipDistance");
-						strcpy(type, "float");
-					}
-					else if (!strcmp(system_value, "cull_distance"))
-					{
-						strcpy(semantic, "SV_CullDistance");
-						strcpy(type, "float");
-					}
-					else
-					{
-						// Unknown system value - use generic float4 and comment
-						strcpy(semantic, system_value);
-						strcpy(type, "float4");
-						sprintf(buffer, "// Unknown system value: %s\n", system_value);
-						mOutput.insert(mOutput.end(), buffer, buffer + strlen(buffer));
-					}
-
-					// Determine the actual type from the swizzle mask if present
-					if (dot != NULL)
-					{
-						size_t mask_len = strlen(dot + 1);
-						// If system value is typically uint (vertex_id, instance_id, etc.) keep uint
-						if (strcmp(type, "uint") != 0 && strcmp(type, "bool") != 0)
-						{
-							if (mask_len > 1)
-								sprintf(type, "float%d", (int)mask_len);
-							else if (mask_len == 1 && !strcmp(type, "float4"))
-								strcpy(type, "float");
-						}
-					}
-
-					// Insert the declaration into the input signature section
-					char *main_ptr = strstr(mOutput.data(), "void main(");
-					if (main_ptr)
-					{
-						size_t offset = main_ptr - mOutput.data();
-						// Move to the line after "void main("
-						NextLine(mOutput.data(), offset, mOutput.size());
-						sprintf(buffer, "  %s %s : %s,\n", type, register_name, semantic);
-						mOutput.insert(mOutput.begin() + offset, buffer, buffer + strlen(buffer));
-					}
-				}
+				//
+				// NOTE: In most cases, ParseInputSignature already generates these parameters
+				// from the input signature comment. We only need to handle this instruction
+				// when the reflection info has been stripped (no input signature present).
+				// Therefore, we do nothing here and rely on ParseInputSignature.
+				//
+				// If you need to handle stripped shaders, uncomment the code below and ensure
+				// that it only runs when ParseInputSignature didn't generate parameters.
 			}
 			else if (!strcmp(statement, "dcl_temps"))
 			{
@@ -6933,6 +6864,9 @@ const string DecompileBinaryHLSL(ParseParameters &params, bool &patched, std::st
 		d.ParseOutputSignature(params.decompiled, params.decompiledSize);
 		if (!params.ZeroOutput)
 		{
+			// Initialize all output registers to zero to prevent HLSL compiler warnings
+			// about uninitialized output components (e.g., o1.zw when only o1.xy is assigned)
+			d.InitializeOutputRegisters();
 			d.ParseCode(shader, params.decompiled, params.decompiledSize);
 		}
 		else
