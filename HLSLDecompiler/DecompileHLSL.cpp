@@ -4519,7 +4519,7 @@ public:
 			}
 			else if (!strcmp(statement, "dcl_input"))
 			{
-				// Can have 'vCoverage' variable implicitly defined, 
+				// Can have 'vCoverage' variable implicitly defined,
 				// not in input signature when reflection is stripped.
 				if (!strcmp(op1, "vCoverage"))
 				{
@@ -4527,6 +4527,117 @@ public:
 					while (*pos != 0x0a) pos++; pos++;
 					sprintf(buffer, "  uint vCoverage : SV_Coverage,\n");
 					mOutput.insert(mOutput.begin() + (pos - mOutput.data()), buffer, buffer + strlen(buffer));
+				}
+			}
+			else if (!strcmp(statement, "dcl_input_sgv"))
+			{
+				// dcl_input_sgv declares an input with a system-generated value semantic.
+				// Format: dcl_input_sgv vN[.mask], system_value_name
+				// Examples:
+				//   dcl_input_sgv v0.x, vertex_id    -> uint v0 : SV_VertexID
+				//   dcl_input_sgv v1.x, instance_id  -> uint v1 : SV_InstanceID
+				//   dcl_input_sgv v2.xyzw, position  -> float4 v2 : SV_Position
+
+				char register_name[64];
+				char system_value[64];
+				char semantic[64];
+				char type[32];
+
+				// Parse the register (op1) and system value (op2)
+				if (op1[0] != 0 && op2[0] != 0)
+				{
+					// Extract register name without swizzle
+					strcpy(register_name, op1);
+					char *dot = strchr(register_name, '.');
+					if (dot) *dot = 0;
+
+					// Parse system value name
+					strcpy(system_value, op2);
+
+					// Map system value to HLSL semantic
+					if (!strcmp(system_value, "vertex_id"))
+					{
+						strcpy(semantic, "SV_VertexID");
+						strcpy(type, "uint");
+					}
+					else if (!strcmp(system_value, "instance_id"))
+					{
+						strcpy(semantic, "SV_InstanceID");
+						strcpy(type, "uint");
+					}
+					else if (!strcmp(system_value, "primitive_id"))
+					{
+						strcpy(semantic, "SV_PrimitiveID");
+						strcpy(type, "uint");
+					}
+					else if (!strcmp(system_value, "position"))
+					{
+						strcpy(semantic, "SV_Position");
+						strcpy(type, "float4");
+					}
+					else if (!strcmp(system_value, "is_front_face"))
+					{
+						strcpy(semantic, "SV_IsFrontFace");
+						strcpy(type, "bool");
+					}
+					else if (!strcmp(system_value, "sampleIndex"))
+					{
+						strcpy(semantic, "SV_SampleIndex");
+						strcpy(type, "uint");
+					}
+					else if (!strcmp(system_value, "rendertarget_array_index"))
+					{
+						strcpy(semantic, "SV_RenderTargetArrayIndex");
+						strcpy(type, "uint");
+					}
+					else if (!strcmp(system_value, "viewport_array_index"))
+					{
+						strcpy(semantic, "SV_ViewportArrayIndex");
+						strcpy(type, "uint");
+					}
+					else if (!strcmp(system_value, "clip_distance"))
+					{
+						strcpy(semantic, "SV_ClipDistance");
+						strcpy(type, "float");
+					}
+					else if (!strcmp(system_value, "cull_distance"))
+					{
+						strcpy(semantic, "SV_CullDistance");
+						strcpy(type, "float");
+					}
+					else
+					{
+						// Unknown system value - use generic float4 and comment
+						strcpy(semantic, system_value);
+						strcpy(type, "float4");
+						sprintf(buffer, "// Unknown system value: %s\n", system_value);
+						mOutput.insert(mOutput.end(), buffer, buffer + strlen(buffer));
+					}
+
+					// Determine the actual type from the swizzle mask if present
+					if (dot != NULL)
+					{
+						size_t mask_len = strlen(dot + 1);
+						// If system value is typically uint (vertex_id, instance_id, etc.) keep uint
+						if (strcmp(type, "uint") != 0 && strcmp(type, "bool") != 0)
+						{
+							if (mask_len > 1)
+								sprintf(type, "float%d", (int)mask_len);
+							else if (mask_len == 1 && !strcmp(type, "float4"))
+								strcpy(type, "float");
+						}
+					}
+
+					// Insert the declaration into the input signature section
+					char *main_ptr = strstr(mOutput.data(), "void main(");
+					if (main_ptr)
+					{
+						size_t offset = main_ptr - mOutput.data();
+						// Move to the line after "void main("
+						NextLine(mOutput.data(), offset, mOutput.size());
+						sprintf(buffer, "  %s %s : %s,\n", type, register_name, semantic);
+						mOutput.insert(mOutput.begin() + offset, buffer, buffer + strlen(buffer));
+					}
 				}
 			}
 			else if (!strcmp(statement, "dcl_temps"))
@@ -4571,11 +4682,12 @@ public:
 			else if (!strncmp(statement, "dcl_", 4))
 			{
 				// Hateful strcmp logic is upside down, only output for ones we aren't already handling.
-				if (strcmp(statement, "dcl_output") && 
+				if (strcmp(statement, "dcl_output") &&
 					strcmp(statement, "dcl_output_siv") &&
 					strcmp(statement, "dcl_globalFlags") &&
-					//strcmp(statement, "dcl_input_siv") && 
-					strcmp(statement, "dcl_input_ps") && 
+					strcmp(statement, "dcl_input_sgv") &&
+					//strcmp(statement, "dcl_input_siv") &&
+					strcmp(statement, "dcl_input_ps") &&
 					strcmp(statement, "dcl_input_ps_sgv") &&
 					strcmp(statement, "dcl_input_ps_siv"))
 				{
